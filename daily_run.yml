@@ -1,0 +1,69 @@
+name: Daily Network Centrality Engine
+
+on:
+  schedule:
+    - cron: "0 4 * * 1-5"  # Mon–Fri at 04:00 UTC
+  workflow_dispatch:
+    inputs:
+      universe:
+        description: "Universe (EQUITY_SECTORS / COMBINED)"
+        required: false
+        default: "all"
+
+jobs:
+  run:
+    name: NetCent — ${{ matrix.universe }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        universe:
+          - EQUITY_SECTORS
+          - COMBINED
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install numpy (pinned)
+        run: pip install "numpy>=1.24.0,<2.0.0"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Network Centrality — ${{ matrix.universe }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          NC_UNIVERSE: ${{ matrix.universe }}
+        run: python trainer.py
+
+      - name: Print summary — ${{ matrix.universe }}
+        run: |
+          python3 - << 'PYEOF'
+          import json, glob
+          files = sorted(glob.glob("hf_cache/**/*.json", recursive=True))
+          if not files:
+              print("Results pushed directly to HF")
+          else:
+              with open(files[-1]) as f:
+                  data = json.load(f)
+              ranked = data.get("latest_ranked", [])
+              print(f"\nUniverse : {data.get('universe')}")
+              print(f"Date     : {data.get('latest_date')}")
+              print(f"\nTop {len(ranked[:6])} ETFs by Return-to-Risk Score:")
+              for i, r in enumerate(ranked[:6], 1):
+                  print(
+                      f"  #{i} {r['ticker']:6s} "
+                      f"score={r['final_score']:.4f}  "
+                      f"ret={r['expected_return']*100:+.2f}%  "
+                      f"risk={r['systemic_risk']:.3f}"
+                  )
+              print(f"\nMost systemically risky:")
+              most_risky = max(ranked, key=lambda x: x['systemic_risk'])
+              print(f"  {most_risky['ticker']} (risk={most_risky['systemic_risk']:.3f})")
+          PYEOF
